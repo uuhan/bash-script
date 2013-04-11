@@ -1,0 +1,861 @@
+#!/bin/bash  			 
+##########################################
+#
+#Creator : Linux_x189 v0.0.6 
+#
+#
+#Share under  GPL v2 Licence
+#
+#
+##########################################
+#Error sig               #
+#124 for save_error
+#125 for if_root_proper  #
+#126 for if_mounted      #
+#127 for if_exist        #
+#128 for if_writable     #
+
+PATH=/:/bin
+mount -t proc     proc   /proc   -o noexec,nosuid,nodev &>/dev/null 
+mount -t sysfs    sysfs  /sys    -o noexec,nosuid,nodev &>/dev/null 
+mount -t rootfs   rootfs /       -o remount,rw     
+mount -t devtmpfs dev    /dev    || \
+	{
+	echo /sbin/mdev >/proc/sys/kernel/hotplug  # Use mdev instead
+	mdev -s				 	   # if devtmpfs fail
+	}
+
+[[ -e "/dev/fd" ]] || ln -s /proc/self/fd /dev/fd &>/dev/null
+echo  0 > /proc/sys/kernel/printk
+exec   &>/dev/console </dev/console 
+clear; clear; clear
+
+Green_msg(){
+	echo -ne "[0;32m* $1\n[0;39m"
+}
+Red_msg(){
+	echo -ne "[0;31m* $1\n[0;39m"
+}
+Err_msg(){
+	Red_msg "$1"		 
+	echo
+	Red_msg "* ...Exit... Ctrl+Alt+Del to reboot" 
+	exec	/bin/bash
+	exec	/bin/sh
+	exec	/bin/ash
+}
+#########Storage delay###################
+timer=2
+while [[ $timer != 0 ]];do
+	sto_num_pre=`blkid 2>/dev/null |wc -l`
+	sleep ${timer}
+	sto_num_after=`blkid 2>/dev/null |wc -l`
+	if [[ ${sto_num_pre} == ${sto_num_after} ]]; then
+		((timer-=1))
+	fi
+done
+for cmd in `cat /proc/cmdline`; do
+	case $cmd in
+		img=*|image=*)
+			img=${cmd#*=}
+			;;
+		copy2ram)
+			;;
+		UUID=*|uuid=*)
+			UUID=${cmd#*=}
+			;;
+		user=*)
+			user=${cmd#*=}
+			;;
+		dolvm)
+			dolvm=1
+			lvm vgchange -ay --sysinit 
+			;;
+		depth)
+			depth=1
+			;;
+		save=*)
+			save_file=${cmd#*=}
+			;;
+		root=*)
+			root=${cmd#*=}
+			case ${root} in
+				disk=*)
+					disk=${root#*=}
+					;;
+				img=*|image=*)
+					 img=${root#*=}
+					;;
+				iso=*|ISO=*)
+					 iso=${root#*=}
+					;;
+			esac
+			;;
+
+		nboot)
+			nboot=1
+			;;
+		cdboot)
+			cdboot=1
+			;;
+		imgboot)
+			imgboot=1
+			;;
+		isoboot)
+			isoboot=1
+			;;
+	esac
+done
+#########Default option###################
+module_version="3.8.1-pf"
+real_root="/.live/root"
+_mount(){
+if   blkid |grep -i "${1}" |grep -iq "ntfs"   ; then
+	ntfs-3g -o rw 		      $1 $2 &>/dev/null 
+elif blkid |grep -i "${1}" |grep -iEq "iso9660|/dev/sr|/dev/scd"; then
+	mount   -o loop,ro -t iso9660 $1 $2 &>/dev/null 
+else 
+	mount   -o rw      -t auto    $1 $2 &>/dev/null 
+fi
+}
+findmnt(){
+	local mnt_msg
+	mnt_msg=(`cat /proc/mounts |grep -i "$1"`)
+	echo ${mnt_msg[0]}
+}
+#Broken lib fix
+lib_fix() {
+for lib in /lib/*; do
+	if [[ ! -e ${real_root}/${lib#*/} && -e ${lib} ]]; then
+		readlink $lib &>/dev/null || \
+			{
+				cp ${lib} ${real_root}${lib}
+			}
+		readlink $lib &>/dev/null && \
+			{
+				cp ${lib%/*}/`readlink ${lib}` ${real_root}${lib%/*} && \
+				ln -s `readlink ${lib}` ${real_root}${lib}
+			}
+	elif [[ "$lib" == /* ]]; then
+				echo ${lib#*/}:Exist
+	else
+				:
+	fi
+done
+}
+
+Root_check(){
+	[[ -z "$1" ]] && return 1
+	if chroot $1 echo &>/dev/null || chroot $1  /bin/sh echo &>/dev/null; then
+		return 0
+	else
+		return 1
+	fi
+}
+If_Ext_in_Squ(){
+	local squfile imgfile total
+	squfile=$1
+	[[ -d "/.live/squfile" ]] || mkdir  -p /.live/squfile
+	umount /.live/squfile &>/dev/null 
+	umount /.live/ro      &>/dev/null 
+	case ${squfile} in
+		*/*)
+			mount  -n -t squashfs -o loop,ro                ${squfile}  /.live/squfile
+			;;
+		*)
+			mount  -n -t squashfs -o loop,ro  /.live/device/${squfile}  /.live/squfile
+			;;
+	esac
+	total=(   `find  /.live/squfile -maxdepth 1`)
+	[[ ${#total[@]}   -ge 5 ]] && return 1
+	imgfile=($(find  /.live/squfile -exec bash -c "file '{}' |grep -iq 'filesystem data' && echo -e '{}\n'" ';'))
+	[[ ${#imgfile[@]} -ge 2 ]] && return 1
+	if [[ -n ${imgfile} ]]; then 
+		mount  -n -t auto     -o loop,ro  ${imgfile} /.live/ro
+		[[ $? == 0 ]] || return 1
+		Root_check /.live/ro
+		[[ $? == 0 ]] || return 1
+	else
+		return 1
+	fi
+}
+Medium_check(){
+local hint
+if readlink ${1:-:} &>/dev/null ; then 
+	: ${hint:=`readlink $1`}
+else
+	: ${hint:=$1}
+fi
+cd_part=`blkid |grep -iE  "/dev/sr|/dev/scd" |cut -d: -f1 |tac`
+hd_part=`blkid |grep -ivE "/dev/dm" |grep -iE "${hint:-:}" |cut -d: -f1 |tac`
+}
+PKG_prepare(){          #准备pkg,默认为${Img_path}/PKG
+	Green_msg "Prepare for additional package...Wait..."
+	[[ -n ${Img_path} ]] && [[ -z ${PKG_path} ]] && : ${PKG_path:=${Img_path%/*}/PKG} || \
+		return 127
+	PKG_list=($(
+		while read a; do
+			file $a |grep -iq ": squashfs filesystem" && echo $a
+		done < <(find ${PKG_path} -type f)
+	))
+
+	[[ -z "${PKG_list[@]}" ]] && Red_msg "No package found"   && return 0
+	local pkg_name
+	for x in ${PKG_list[@]}; do
+		pkg_name=${x##*/}
+		pkg_name=${pkg_name%.*}
+		mkdir -p 			   /.live/PKG_${pkg_name}
+		mount -nt squashfs ${x} -o loop,ro /.live/PKG_${pkg_name}
+		mount -o  remount,append:/.live/PKG_${pkg_name}=ro aufs         /.live/root
+	done
+
+}
+
+Img_search(){ 		#Search for which partition containing the root image
+local x i 
+Medium_check ${2} ${3} ${4}
+if [[ ${cdboot:-0} == 0 ]];then
+	device_list=${hd_part}
+else
+	device_list=${cd_part}
+fi
+for device in  ${device_list}; do
+		umount /.live/device &>/dev/null 
+		_mount "$device" "/.live/device"   
+	while [[ $? == 0 ]];do
+		if cat /proc/mounts |grep -q "/.live/device" ; then
+			break
+		else
+			_mount "$device" "/.live/device"  
+		fi
+	done
+	if [[ ${depth:-0} == 0 ]]; then
+		for ((i=1; i<=3; i++)); do
+			Img_path=`find /.live/device -maxdepth $i -type f -iname $1`
+			if [[ -z "${Img_path}" ]]; then continue; fi
+			break
+		done
+
+	else
+			Img_path=`find /.live/device -type f -iname $1`
+	fi
+	if [[ -n "${Img_path}" ]]; then
+		Green_msg "Found!"
+		return 0
+	fi
+done	
+
+if [[ -z ${Img_path} ]] && [[ ${cdboot:-0} == 1 ]]; then
+	for x in ${hd_part}; do
+		if  echo "$x" |grep -ivEq "/dev/sd[a-z][1-9]" ;then
+			umount 		      /.live/device &>/dev/null 
+			mount -t iso9660 ${x} /.live/device &>/dev/null 
+			[[ $? == 0 ]] || continue
+			if [[ ${depth:-0} == 0 ]]; then
+				for ((i=1; i<=3; i++)); do
+					Img_path=`find /.live/device -maxdepth $i -type f -iname $1`
+					if [[ -z "${Img_path}" ]]; then continue; fi
+					break
+				done
+
+			else
+					Img_path=`find /.live/device -type f -iname $1`
+			fi
+			if [[ -n "${Img_path}" ]]; then
+				Green_msg "Found!"
+				return 0
+			fi
+		else
+			continue
+		fi
+	done
+fi
+[[ ! -f "/.live/device/${1}" ]] && Err_msg "Cannot Find image:${1}" 
+}
+
+Savfile_check(){	#Check if the Savefile works
+local save_part save_file save_part_mnt="/.live/save"
+local label uuid
+if [[  $1 == */* ]]; then
+	save_part=${1%/*}
+	save_file=${1##*/}
+else
+	save_part=''
+	save_file=$1
+fi
+
+
+if [[ -z ${save_part} ]]; then 
+	if [[ -e ${Img_path%/*}/${save_file:-$1} ]]; then
+		if [[ -d ${Img_path%/*}/${save_file:-$1} ]]; then
+			Green_msg "Savedir Exist"
+			mount --rbind ${Img_path%/*}/${save_file:-$1}    /.live/rw
+			if [[ -w /.live/rw ]]; then
+				Green_msg "Savedir:${save_file:-$1} works"
+				mount -n -t aufs -o br:/.live/rw=rw aufs /.live/root
+				return 0
+			else
+				return 128
+			fi
+		elif file ${img_path%/*}/${save_file:-$1} |grep -iq ": squashfs"; then
+			:
+		else
+			Green_msg "Savefile Exist" 
+			if mount -o loop,rw   ${Img_path%/*}/${save_file:-$1} /.live/rw &>/dev/null ; then
+				if [[ -w /.live/rw ]]; then
+					Green_msg "Savefile:${save_file:-$1} works"
+					mount -n -t aufs -o br:/.live/rw=rw aufs /.live/root
+					return 0
+				else
+					return 128
+				fi
+			else	
+				Red_msg "But it does not work"
+				return 128
+			fi
+		fi
+	else
+		return 124
+	fi
+else
+case ${save_part} in
+	label=*|LABEL=*)
+		save_part=$(findfs LABEL=${save_part#*=})
+		[[ $? == 0 ]] || return 127
+		;;
+	uuid=*|UUID=*)
+		save_part=$(findfs UUID=${save_part#*=})
+		[[ $? == 0 ]] || return 127
+		;;
+	*)
+		;;
+esac
+
+if [[ "${save_part}" == "`findmnt /.live/device`" ]]; then save_part_mnt="/.live/device"; fi
+
+[[ -d ${save_part_mnt} ]] || mkdir -p ${save_part_mnt}
+if ! cat /proc/mounts |grep -iq "${save_part_mnt}"; then  
+	mount -t auto -o rw ${save_part} ${save_part_mnt} &>/dev/null
+	[[ $? == 0 ]]    		  || return 126
+fi
+[[    -w ${save_part_mnt} ]] 		  || return 128
+[[    -e ${save_part_mnt}/${save_file} ]] || return 127
+if [[ -d ${save_part_mnt}/${save_file} ]]; then
+	Green_msg "Save dir exist"
+	mount --rbind ${save_part_mnt}/${save_file} /.live/rw &>/dev/null
+	if [[ ! -w /.live/rw ]]; then 
+		return 128
+	else
+		Green_msg "Savedir:${save_file:-$1} works"
+		mount -n -t aufs -o br:/.live/rw=rw aufs /.live/root
+	fi
+
+else
+	Green_msg "Save file exist"
+	if mount -o loop,rw ${save_part_mnt}/${save_file} /.live/rw &>/dev/null ; then
+		if [[ -w /.live/rw ]]; then
+			Green_msg "Savefile:${save_file} works"
+			mount -n -t aufs -o br:/.live/rw=rw aufs /.live/root 
+			return 0
+		fi
+		return 128
+	else	
+		Red_msg "But it does not work"
+		return 128
+	fi
+
+fi
+fi
+}
+
+Aufs_img_mount() {
+if [[ -n "${save_file}" ]]; then  
+Savfile_check $1
+case $? in
+	124)
+		;;
+	126)
+		Red_msg "Your Specified PARTITION does not work"
+		;;
+	127)
+		Red_msg "Your Specified LABEL or UUID or Savefile does not exist"
+		;;
+	128)
+		Red_msg "Your Specified Save(file|dir) is not writable"
+		;;
+	[^0])
+		Red_msg "Error occur...Savefile doesnot work"
+		;;
+	0)	
+		;;
+esac
+else
+		mount  -n -t tmpfs       -o mode=0777       tmpfs          /.live/rw && \
+		Green_msg "Start a new system"
+		mount  -n -t aufs	 -o br:/.live/rw=rw aufs	   /.live/root
+fi
+	if ! grep -iq "/.live/rw" /proc/mounts ; then
+		mount  -n -t tmpfs       -o mode=0777       tmpfs          /.live/rw && \
+			Green_msg "Start a new system"
+		mount  -n -t aufs	 -o br:/.live/rw=rw aufs	   /.live/root
+	fi
+if grep -iq copy2ram /proc/cmdline; then
+	Green_msg "Copy Img to ram... Wait..."
+	if [[ `du -sm ${Img_path} |cut -f1` -gt ${max_tmpfs} ]]; then
+		Red_msg "Not enough mem... Force start directly from your medium"
+	else
+		cp     ${Img_path} 	 /
+		if [[ $? == 0 ]]; then
+			Img_path="/${Img_path##*/}"
+			umount /.live/device && rm -rf /.live/device
+		else
+			Red_msg "Error Copy Img to ram... Start directly from your medium"
+			[[ -e "/${Img_path##*/}" ]] && rm -rf /${Img_path##*/}
+		fi
+	fi
+fi
+	mount   -n -t squashfs    -o loop,ro      ${Img_path}      /.live/ro
+	if   Root_check /.live/ro; then
+		:
+	elif If_Ext_in_Squ ${Img_path}; then
+		:
+	else
+		return 125
+	fi
+	
+	mount   -o remount,append:/.live/ro=ro        aufs         /.live/root
+}
+Aufs_cd_mount(){
+if [[ -n "${save_file}" ]]; then  
+Savfile_check $1
+case $? in
+	124)
+		;;
+	126)
+		Red_msg "Your Specified PARTITION does not work"
+		;;
+	127)
+		Red_msg "Your Specified LABEL or UUID or Savefile does not exist"
+		;;
+	128)
+		Red_msg "Your Specified Save(file|dir) is not writable"
+		;;
+	[^0])
+		Red_msg "Error occur...Savefile doesnot work"
+		;;
+	0)	
+		;;
+esac
+else
+		mount  -n -t tmpfs       -o mode=0777       tmpfs          /.live/rw && \
+		Green_msg "Start a new system"
+		mount  -n -t aufs	 -o br:/.live/rw=rw aufs	   /.live/root
+fi
+	if ! grep -iq "/.live/rw" /proc/mounts ; then
+		mount  -n -t tmpfs       -o mode=0777       tmpfs          /.live/rw && \
+			Green_msg "Start a new system"
+		mount  -n -t aufs	 -o br:/.live/rw=rw aufs	   /.live/root
+	fi
+	if   grep -iq  copy2ram   /proc/cmdline; then
+		Green_msg "Copy Img to ram... Wait..."
+		if [[ `du -sm ${Img_path} |cut -f1` -gt ${max_tmpfs} ]]; then
+			Red_msg "Not enough mem... Force start directly from your medium"
+		else
+			cp     ${Img_path} 	 /
+			if [[ $? == 0 ]]; then
+				Img_path="/${Img_path##*/}"
+				umount /.live/device && rm -rf /.live/device
+			else
+				Red_msg "Error Copy Img to ram... Start directly from your medium"
+				[[ -e "/${Img_path##*/}" ]] && rm -rf /${Img_path##*/}
+			fi
+		fi
+	fi
+		mount  -n -t squashfs    -o loop,ro     ${Img_path}       /.live/ro			  
+		
+		if   Root_check   /.live/ro; then
+			:
+		elif If_Ext_in_Squ ${Img_path}; then
+			:
+		else
+		return 125
+		fi
+	mount  -o remount,append:/.live/ro=ro    	aufs		  /.live/root
+#	mount  -n -t aufs  aufs  -o br:/.live/rw=rw:/.live/ro=ro  /.live/root \
+#		&>/dev/null
+}
+Aufs_disk_mount(){
+[[ -z ${1} ]] && return 127
+local dv=${1}
+case ${1} in
+	UUID=*|uuid=*)
+		dv=$(findfs UUID="$1")
+		;;
+	LABEL=*|label=*)
+		dv=$(findfs LABEL="$1")
+esac
+	mount  -n -t auto  ${dv} -o ro			          /.live/ro   \
+								  &>/dev/null  || return 126
+	Root_check   /.live/ro
+	[[ $? == 0 ]] || return 125
+if [[ -n "${save_file}" ]]; then  
+Savfile_check $1
+case $? in
+	124)
+		;;
+	126)
+		Red_msg "Your Specified PARTITION does not work"
+		;;
+	127)
+		Red_msg "Your Specified LABEL or UUID or Savefile does not exist"
+		;;
+	128)
+		Red_msg "Your Specified Save(file|dir) is not writable"
+		;;
+	[^0])
+		Red_msg "Error occur...Savefile doesnot work"
+		;;
+	0)	
+		;;
+esac
+else
+		mount  -n -t tmpfs       -o mode=0777       tmpfs          /.live/rw && \
+		Green_msg "Start a new system"
+		mount  -n -t aufs	 -o br:/.live/rw=rw aufs	   /.live/root
+fi
+	if ! grep -iq "/.live/rw" /proc/mounts ; then
+		mount  -n -t tmpfs       -o mode=0777       tmpfs          /.live/rw && \
+			Green_msg "Start a new system"
+		mount  -n -t aufs	 -o br:/.live/rw=rw aufs	   /.live/root
+	fi
+	
+		mount  -o    remount,append:/.live/ro=ro    aufs 	   /.live/root
+}
+Aufs_iso_mount(){
+	local squlist x loop img_size
+	mkdir  -p  /.live/iso
+	mount  -n -t iso9660     ${Img_path}           -o loop,ro	  /.live/iso  2>/dev/null
+	[[ $? == 0 ]] || return 126
+	while [[ $? == 0 ]]; do
+		if cat /proc/mounts |grep -iq "/.live/iso"; then
+			break
+		fi
+		mount  -n -t iso9660     /.live/device/$1  -o loop,ro	  /.live/iso  2>/dev/null
+	done
+
+	squlist=$(find  /.live/iso -type f -exec bash -c "file '{}' |grep -iq ': squashfs' && echo -e '{}\n'" ';')	 
+	[[ -z ${squlist} ]] && return 127
+	Green_msg "Squfile found: "
+	echo $squlist
+	for x   in ${squlist}; do
+		umount /.live/ro &>/dev/null
+		mount -n -t squashfs -o loop,ro ${x} /.live/ro
+		[[ $? == 0 ]] || continue
+		if Root_check /.live/ro; then
+			img_size=`du -sm ${x} |cut -f1`
+			break	
+		elif If_Ext_in_Squ ${x}; then
+			img_size=`du -sm ${x} |cut -f1`
+			break
+		else
+			umount /.live/ro &>/dev/null
+		fi
+	done
+	if ! grep -iq "/.live/ro" /proc/mounts; then return 125; fi
+
+	if grep -iq copy2ram /proc/cmdline; then
+		Green_msg "Copy Img to ram... Wait..."
+		if [[ ${img_size} -gt ${max_tmpfs} ]]; then
+			Red_msg "Not enough mem... Force start directly from your medium"
+		else
+			if	cp      ${x}	/ 			  &>/dev/null; then
+				umount /.live/ro
+				mount -n -t squashfs -o loop,ro /${x##*/}   /.live/ro
+				if Root_check /.live/ro; then
+					umount /.live/iso         && rm -rf /.live/iso
+					umount /.live/device      && rm -rf /.live/device
+					[[ -d "/.live/squfile" ]] && rm -rf /.live/squfile 
+				else 
+					If_Ext_in_Squ "/${x##*/}"	
+					umount /.live/iso         && rm -rf /.live/iso
+					umount /.live/device      && rm -rf /.live/device
+				fi
+			else
+				Red_msg "Error Copy Img to ram... Start directly from your medium"
+			fi
+		fi
+	fi
+if [[ -n "${save_file}" ]]; then  
+Savfile_check $1
+case $? in
+	124)
+		;;
+	126)
+		Red_msg "Your Specified PARTITION does not work"
+		;;
+	127)
+		Red_msg "Your Specified LABEL or UUID or Savefile does not exist"
+		;;
+	128)
+		Red_msg "Your Specified Save(file|dir) is not writable"
+		;;
+	[^0])
+		Red_msg "Error occur...Savefile doesnot work"
+		;;
+	0)	
+		;;
+esac
+else
+		mount  -n -t tmpfs       -o mode=0777       tmpfs          /.live/rw && \
+		Green_msg "Start a new system"
+		mount  -n -t aufs	 -o br:/.live/rw=rw aufs	   /.live/root
+fi
+	if ! grep -iq "/.live/rw" /proc/mounts ; then
+		mount  -n -t tmpfs       -o mode=0777       tmpfs          /.live/rw && \
+			Green_msg "Start a new system"
+		mount  -n -t aufs	 -o br:/.live/rw=rw aufs	   /.live/root
+	fi
+
+		mount  -o    remount,append:/.live/ro=ro    aufs	   /.live/root
+}
+User_add(){
+if [[ -z $1 ]]; then return 0; fi
+local u p gid
+local group
+[[ -d  ${real_root}/bin ]] || mkdir -p ${real_root}/bin
+cp /bin/busybox ${real_root}/.busybox
+if [[ ! -x ${real_root}/bin/adduser ]] ; then
+	ln -sf ../.busybox ${real_root}/bin/adduser
+fi
+if [[ ! -x ${real_root}/bin/chpasswd ]]; then
+	ln -sf ../.busybox ${real_root}/bin/chpasswd
+fi
+u=${1%:*} 
+p=${1#*:}
+[[ -z $u ]] && u="root"
+if [[ ! "${u}" == "root" ]]; then
+	Green_msg "Your login USER account is ${u}" 
+	[[ -d "${real_root}/home" ]] || mkdir -p ${real_root}/home
+	chroot ${real_root} /bin/adduser -Dh /home/${u} ${u} 	&>/dev/null
+	[[ -n "$p" ]] && \
+	chroot ${real_root} bash -c "echo $1 |/bin/chpasswd"    &>/dev/null
+	if   ! cat ${real_root}/etc/passwd |grep -iq "^${u}"; then
+	
+		cat >> ${real_root}/etc/passwd << EOF
+${u}::1500:1500::/home/${u}:/bin/bash
+EOF
+		cat >> ${real_root}/etc/group << EOF
+${u}:x:1500:
+EOF
+		mkdir -p ${real_root}/home/${u}
+		chown -R 1500:1500 ${real_root}/home/${u}
+
+	elif ! cat ${real_root}/etc/group  |grep -iq "^${u}"; then
+		gid=$(cat ${real_root}/etc/passwd |grep -i "^${u}"|cut -d: -f4)
+		cat >> ${real_root}/etc/group << EOF
+${u}:x:${gid}:
+EOF
+	fi
+	for group in disk wheel audio cdrom video users;do
+		if cat ${real_root}/etc/group |grep "${group}" |grep -iq ":$";then
+			sed -i -e "/^${group}/s/.*/&${u}/" ${real_root}/etc/group
+		else
+			sed -i -e "/^${group}/s/.*/&,${u}/" ${real_root}/etc/group 
+		fi
+
+	done
+			[[ -e "${real_root}/etc/sudoers" ]] && \
+				echo "${u} ALL=(ALL) NOPASSWD: ALL" >> ${real_root}/etc/sudoers
+	[[ -z $p ]] && \
+	sed -i -e "/^$u/s/x//" ${real_root}/etc/passwd
+fi
+	run_cmd=`cat ${real_root}/etc/passwd |grep -i "^${u}"|cut -d: -f7`
+	if [[ ! ${run_cmd} =~ /bin/.+h ]]; then
+		if [[ -x ${real_root}/bin/bash ]]; then
+			sed -i -e "/^$u/s%:[^:]*$%:/bin/bash%"  ${real_root}/etc/passwd
+		else
+			sed -i -e "/^$u/s%:[^:]*$%:/bin/sh%"    ${real_root}/etc/passwd
+		fi
+	fi
+	sed -i -e "/^root/s/x//" ${real_root}/etc/passwd
+}
+
+live_main(){
+modprobe aufs &>/dev/null  		     || \
+	insmod /lib/modules/aufs.ko &>/dev/null  || Err_msg "Error loading aufs"
+[[ -d /dev/pts ]] || mkdir -p /dev/pts
+mount   -t devpts none /dev/pts
+for dir in ro rw  root device ; do
+	mkdir -p /.live/${dir}
+done
+total_ram=`free -mt|sed -n 5p |cut -b 14-21`
+max_tmpfs=$((${total_ram}*4/5))
+if [[ ! -d /dev/shm ]]; then
+	rm -rf /dev/shm &>/dev/null 
+	mkdir  -p  /dev/shm
+	mount  -t  tmpfs -o size=${max_tmpfs}m tmpfs /dev/shm
+fi
+#==============================================================================================
+if [[ ${cdboot:-0} == 1 ]]; then
+	Green_msg "Search for ${img}"
+	Img_search ${img:-"image.squ"} 
+	Aufs_cd_mount   ${save_file:-"save"}		        
+	case $? in
+		125)
+			Err_msg "Image file does not contain a valid root fs"
+			;;
+		[^0])
+			Err_msg "Failed boot from your disc "    
+			;;
+	esac
+	grep -iq "\<add.pkg\>" /proc/cmdline && PKG_prepare
+	User_add ${user:-root} 
+	return 0
+fi
+
+if [[ ${imgboot:-0} == 1 ]]; then
+	case ${img} in
+		uuid=*|UUID=*)   #...For example img=XX...XX/image.squ
+			UUID=${img%/*}
+			UUID=${UUID#*=}
+			 img=${img##*/}
+			;;
+		label=*|LABEL=*)
+			LABEL=${img%/*}
+			LABEL=${label#*=}
+			  img=${img##*/}
+			;;
+		*/*)
+			   hd=${img%/*}
+			  img=${img##*/}
+			;;
+	esac
+
+	Green_msg "Search for ${img}"
+	Img_search  ${img:-"image.squ"} ${UUID} ${LABEL} ${hd} 
+	Aufs_img_mount ${save_file:-"save.img"}	      
+	case $? in
+		125)
+			Err_msg "Image file does not contain a valid root fs"
+			;;
+		[^0])
+			Err_msg "Failed boot from your image" 
+			;;
+	esac
+	grep -iq "\<add.pkg\>" /proc/cmdline && PKG_prepare
+	User_add ${user:-root}
+	return 0
+fi
+
+if [[ ${isoboot:-0} == 1 ]]; then
+	case ${iso} in
+		uuid=*|UUID=*)   #...For example iso=XX...XX/XXX.iso
+			UUID=${iso%/*}
+			UUID=${UUID#*=}
+			 iso=${iso#*/}
+			;;
+		*/*)
+			hd=${iso%/*}
+			iso=${iso##*/}
+			;;
+	esac
+	Green_msg "Search for ${iso}"
+	Img_search  ${iso:-"gentoo.iso"} ${UUID} ${hd} 
+	Aufs_iso_mount ${save_file:-"save.img"}
+	case $? in
+		125)
+			   Err_msg "Not available squ file contains a valid root fs"
+			   ;;
+		126)
+			   Err_msg "It seems your specified disc does not work"
+			   ;;
+		127)
+			   Err_msg "Your disc specified does not contain a  (valid?support?) squashfs root"
+			   ;;
+		[^0])
+			   Err_msg "Failed boot from you iso"
+			   ;;
+	esac	
+	grep -iq "\<add.pkg\>" /proc/cmdline && PKG_prepare
+	User_add ${user:-root}
+	return 0
+fi
+	Green_msg "Start your linux from DISK" 
+	Aufs_disk_mount ${disk}					     
+	case $? in 
+	125)  Err_msg "Your Specified Root can not work properly";;
+	126)  Err_msg "YOU SHOULD NOT BE HERE,disk partition specified does not work";;
+	127)  Err_msg "No DISK partition specified,Error encountered~";;
+	*)    Err_msg "Unknown Error Occur";;
+	esac
+}
+norm_main(){
+	local label uuid r
+	mkdir -p /.live/root
+	case ${root} in
+		label|LABEL=*)
+			label=${root#*=}
+			;;
+		uuid|UUID=*)
+			uuid=${root#*=}
+			;;
+	esac
+	Medium_check $label $uuid $root
+	if [[ -z ${hd_part} ]]; then
+		Err_msg "Not valid root partition specified"
+	else
+		for r in ${hd_part}; do
+			mount -t auto -o rw ${r} /.live/root && \
+			Root_check /.live/root 		     && \
+			break
+			continue
+		done
+	fi
+	if ! Root_check /.live/root; then Err_msg "Specified root parttion seems does not work"; fi
+	User_add ${user}
+}
+if [[ ${nboot:-0} == 0 ]]; then
+	live_main
+	grep -iq "\<add.tool\>" /proc/cmdline && \
+	{
+		cp /bin/bash	   ${real_root}
+		cp /bin/mksquashfs ${real_root}  
+		lib_fix
+	} &>/dev/null
+
+	[[ -d ${real_root}/lib/modules/ ]] || mkdir -p ${real_root}/lib/modules && \
+	{
+		mount -n -t tmpfs -o mode=0700 tmpfs ${real_root}/lib/modules 
+		cp -r /lib/modules/${module_version} ${real_root}/lib/modules 
+		cp -r /lib/firmware 	      	     ${real_root}/lib/
+	} &>/dev/null
+
+		for dir in `ls -1 /.live/`; do
+			if [[ ! "$dir" =~ root|rw ]]; then
+				[[ -d ${real_root}/.live/$dir ]] || \
+				mkdir -p $real_root/.live/$dir
+				mount --move /.live/$dir $real_root/.live/$dir
+			fi
+		done
+			if cat /proc/mounts |grep -iq "/.live/rw"; then           #/.live/rw is not always a mount point :)
+					[[ -d ${real_root}/.live/rw ]] || \
+					mkdir -p $real_root/.live/rw
+					mount --move /.live/rw $real_root/.live/rw
+			fi
+else
+	norm_main	
+fi
+[[ -d ${real_root}/dev  ]] || mkdir -p ${real_root}/dev
+[[ -d ${real_root}/proc ]] || mkdir -p ${real_root}/proc
+[[ -d ${real_root}/sys  ]] || mkdir -p ${real_root}/sys
+mount --move /dev   ${real_root}/dev
+mount --move /proc  ${real_root}/proc
+mount --move /sys   ${real_root}/sys
+exec switch_root /.live/root /sbin/init &>/dev/null  
+
+Red_msg "You should not be here... If so, I am sorry for that, your root switch "
+Red_msg "did not seem to work! I start a shell for you to debug if needed       "
+Red_msg "====================>========>==========>============>================="
+exec /bin/bash
+exec /bin/sh
+exec /bin/busybox ash
