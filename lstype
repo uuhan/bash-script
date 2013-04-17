@@ -1,0 +1,90 @@
+#!/bin/bash
+_Usage(){
+cat << EOF
+lstype  -[rRh] [exe|text|pdf|djvu|dir|lib|link..]
+	-r: 递归搜索
+	-R: 同-r
+	-h: 显示此帮助
+显示当前目录下特定类型的文件
+EOF
+exit 1
+}
+
+
+[[ -z "$1" ]] && _Usage
+
+#while getopts ":rRh" x; do
+#	case $x in
+#		r|R)
+#			cmd="find"
+#			;;
+#		h|help)
+#			_Usage
+#			;;
+#
+#	esac
+#done
+for x in "$@";do
+	[[ "$x" == -* ]] && \
+		{
+			case $x in 
+				-r|-R)
+					: ${cmd:="find"}
+					;;
+				*)
+					_Usage
+					;;
+			esac
+		}
+done
+
+: ${cmd:="ls"}
+old_IFS=$IFS
+IFS=$'\n'
+while [[ -n "$1" ]]; do
+	[[ "$1" == -* ]] && shift && continue
+
+	echo "$1:"
+	while read a; do
+		case $1 in
+			exe)
+				file $a |grep -iEq ": ELF 32-bit LSB executable" && echo $a
+				show_flag=1
+				;;
+			lib)
+				file $a |grep -iEq ": ELF 32-bit LSB shared object" && echo $a
+				show_flag=1
+				;;
+			link)
+				file $a |grep -iEq ": symbolic link to" && echo $a
+				show_flag=1
+				;;
+			text)
+				file $a |grep -iEq ": ASCII text" && echo $a
+				show_flag=1
+				;;
+			pdf)
+				file $a |grep -iEq ": PDF document" && echo $a
+				show_flag=1
+				;;
+			djvu|djv)
+
+				file $a |grep -iEq ": DjVu multiple page document" && echo $a
+				show_flag=1
+				;;
+			dir)
+
+				file $a |grep -iEq ": directory" && echo $a
+				show_flag=1
+				;;
+			*)
+				_Usage
+				;;
+				
+		esac
+	done < <($cmd) 2>/dev/null
+	echo
+	shift
+done
+IFS=$old_IFS
+[[ -z "${show_flag}" ]] && _Usage
