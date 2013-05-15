@@ -1,0 +1,154 @@
+" {{{ Autocommands
+if has("autocmd")
+  
+" autocmd BufReadPost * colorscheme molokai
+
+  fu Gcc()
+   :w
+   exec "silent !gcc -o " . expand("%:t:r") . " %" 
+   exec "!./" . expand("%:t:r") 
+  endf
+
+
+  fu Python()
+   :w
+   exec "!python " . expand("%:t")
+  endf
+
+  fu DelayRead()                     
+    while 1                          
+      3sleep
+      normal                
+    endwhile                         
+  endf
+
+  augroup gentoo
+    au!
+
+  " Gentoo-specific settings for ebuilds.  These are the federally-mandated
+  " required tab settings.  See the following for more information:
+  " http://www.gentoo.org/proj/en/devrel/handbook/handbook.xml
+  " Note that the rules below are very minimal and don't cover everything.
+  " Better to emerge app-vim/gentoo-syntax, which provides full syntax,
+  " filetype and indent settings for all things Gentoo.
+  au BufRead,BufNewFile *.e{build,class} let is_bash=1|setfiletype sh
+  au BufRead,BufNewFile *.e{build,class} set ts=4 sw=4 noexpandtab
+  autocmd FileType tex
+        \ set grepprg=grep\ -nH\ $* |
+        \ let g:tex_flavor='latex'  |
+        \ set expandtab       |
+        \ set tabstop=4       |
+        \ set shiftwidth=4    |
+        \ set softtabstop=4   | 
+        \ nnoremap <silent>, @=((foldclosed(line('.')) < 0) ? 'zc' : 'zo')<CR> |
+        \ if  has("gui_running") |
+        \   set guioptions+=m    |
+        \ endif
+
+  autocmd FileType c
+        \ imap #i #include<>i|
+        \ imap ;; A;
+  autocmd BufNewFile *.sh 
+        \ so /etc/vim/mysh.vim
+  autocmd BufUnload,BufLeave *.c set ft=c
+  " In text files, limit the width of text to 78 characters, but be careful
+  " that we don't override the user's setting.
+  autocmd BufNewFile,BufRead *.txt
+        \ if &tw == 0 && ! exists("g:leave_my_textwidth_alone") |
+        \     setlocal textwidth=78 |
+        \ endif
+
+  autocmd BufNewFile,GuiEnter *.[tT][xX][tT]
+        \ if has("gui_running")               |
+        \     colorscheme ChocolateLiquor     |
+        \     set guifont="Dejavu Sans Mono"  |
+        \ endif                               |
+
+
+
+  autocmd BufRead,BufNewFile,BufReadPost *.py,*.pyw     setf python|nmap <F5> :call Python()
+  autocmd FileType haskell
+        \ set autoindent      |
+        \ set smartindent     |
+        \ set expandtab       |
+        \ set tabstop=4       |
+        \ set shiftwidth=4    |
+        \ set softtabstop=4   | 
+        \ nmap <F1> _?
+
+  autocmd FileType python 
+        \ set autoindent      |
+        \ set smartindent     |
+        \ set expandtab       |
+        \ set tabstop=4       |
+        \ set shiftwidth=4    |
+        \ set softtabstop=4   | 
+        \ let g:pydiction_location = '/usr/share/vim/vimfiles/ftplugin/pydiction/complete-dict' |
+        \ let g:pydiction_menu_height = 20                                                      |  
+        \ let g:neocomplcache_enable_at_startup=1                                               |
+        \ set complete+=k/path/to/pydiction iskeyword+=.,(                                      |  
+        \ if  getline(1) !~ "#!.*python"  |
+        \     so /etc/vim/mypy.vim        |
+        \ endif                           |
+        \ nmap <Tab> a    
+
+
+  "  autocmd BufRead /home/uuhan/program/*.c  
+  "        \ exec "1 " . "s:^:// " . strftime("%Y %b %d %X") . "" |
+  " When editing a file, always jump to the last cursor position
+  autocmd BufReadPost *
+        \ if ! exists("g:leave_my_cursor_position_alone") |
+        \     if line("'\"") > 0 && line ("'\"") <= line("$") |
+        \         exe "normal g'\"" |
+        \     endif |
+        \ endif
+
+  " When editing a crontab file, set backupcopy to yes rather than auto. See
+  " :help crontab and bug #53437.
+  autocmd FileType crontab set backupcopy=yes
+
+  " If we previously detected that the default encoding is not UTF-8
+  " (g:added_fenc_utf8), assume that a file with only ASCII characters (or no
+  " characters at all) isn't a Unicode file, but is in the default encoding.
+  " Except of course if a byte-order mark is in effect.
+  autocmd BufReadPost *
+        \ if exists("g:added_fenc_utf8") && &fileencoding == "utf-8" && 
+        \    ! &bomb && search('[\x80-\xFF]','nw') == 0 && &modifiable |
+        \       set fileencoding= |
+        \ endif
+
+  
+
+
+  autocmd BufNewFile *.desktop  so /etc/vim/desktop.vim
+  autocmd BufReadPost *.eselect set ft=sh
+  autocmd BufNewFile,BufReadPost *.c       nmap <F5> :call Gcc()|
+        \ if filereadable(expand("%:p:h") . "/cscope.out")  |
+        \   let outfile=expand("%:p:h") . "/cscope.out" |
+        \ exec "silent! cscope add " . expand(outfile) |
+        \ elseif filereadable(substitute(expand("%:p:h"), "/[^/]*$", "", "") . "/cscope.out") |
+        \   let outfile=substitute(expand("%:p:h"), "/[^/]*$", "", "" ) . "/cscope.out" |
+        \ exec "silent! cscope add " . expand(outfile)  |
+        \ endif
+
+
+augroup END
+
+augroup filetypedetect
+  au! BufRead,BufNewFile *.m,*.oct set filetype=octave
+augroup END 
+
+
+endif " has("autocmd")
+
+if &term == "linux"
+  colorscheme peachpuff
+endif
+
+if has("gui_running")
+  winpos  50 50
+  set lines=35 columns=100
+endif
+
+" }}}
+" vim: set fenc=utf-8 tw=80 sw=2 sts=2 et filetype=vim:
