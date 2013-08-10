@@ -1,7 +1,7 @@
-#!/bin/bash  			 
+#!/bin/bash
 ##########################################
 #
-#Creator : Linux_x189 v0.0.6 
+#Creator : Linux_x189 v0.0.8 
 #
 #
 #Share under  GPL v2 Licence
@@ -31,15 +31,15 @@ exec   &>/dev/console </dev/console
 clear; clear; clear
 
 Green_msg(){
-	echo -ne "[0;32m* $1\n[0;39m"
+	echo -ne "[0;32m  * $1\n[0;39m"
 }
 Red_msg(){
-	echo -ne "[0;31m* $1\n[0;39m"
+	echo -ne "[0;31m  * $1\n[0;39m"
 }
 Err_msg(){
 	Red_msg "$1"		 
 	echo
-	Red_msg "* ...Exit... Ctrl+Alt+Del to reboot" 
+	Red_msg "  * ...Exit... Ctrl+Alt+Del to reboot" 
 	exec	/bin/bash
 	exec	/bin/sh
 	exec	/bin/ash
@@ -106,8 +106,44 @@ for cmd in `cat /proc/cmdline`; do
 			;;
 	esac
 done
+#########Scan & load kernel modules#######
+#      From gentoo initramfs scripts     #     
+NORMAL="\033[0m"
+BOLD="\033[1m"
+
+
+HWOPTS='keymap cache modules pata sata scsi usb firewire waitscan lvm dmraid mdadm fs net'
+MY_HWOPTS='modules pata sata scsi usb firewire waitscan dmraid mdadm fs net iscsi crypto'
+HWOPTS="$HWOPTS ataraid crypto dmraid firewire fs iscsi lvm mdadm multipath net pata pcmcia sata scsi usb waitscan "
+
+Green_msg 'Scaning  modules'
+
+modules_scan() {
+	local MODS
+
+	MODS=$(cat /etc/modules/${1} 2>/dev/null)
+
+	[[  -n "${MODS}"  ]] &&  \
+		echo -e "${BOLD}   ::${NORMAL} Loading from ${1}: " || \
+		return 127
+
+	for x in ${MODS}
+	do
+			echo -ne "${BOLD}   ::${NORMAL} "
+			echo -ne "Scanning for ${x}..."
+
+			modprobe ${x} > /dev/null 2>&1 && \
+				echo "loaded"	       || \
+				echo "not loaded"
+
+	done
+}
+for modules in ${MY_HWOPTS}
+do
+	modules_scan ${modules}
+done
 #########Default option###################
-module_version="3.8.1-pf"
+module_version="3.10.1-pf"
 real_root="/.live/root"
 _mount(){
 if   blkid |grep -i "${1}" |grep -iq "ntfs"   ; then
@@ -191,6 +227,7 @@ hd_part=`blkid |grep -ivE "/dev/dm" |grep -iE "${hint:-:}" |cut -d: -f1 |tac`
 }
 PKG_prepare(){          #准备pkg,默认为${Img_path}/PKG
 	Green_msg "Prepare for additional package...Wait..."
+	grep -iq "\<copy2ram\>" /proc/cmdline && : ${PKG_path:=${Img_path_old%/*}/PKG}
 	[[ -n ${Img_path} ]] && [[ -z ${PKG_path} ]] && : ${PKG_path:=${Img_path%/*}/PKG} || \
 		return 127
 	PKG_list=($(
@@ -203,7 +240,7 @@ PKG_prepare(){          #准备pkg,默认为${Img_path}/PKG
 	local pkg_name
 	for x in ${PKG_list[@]}; do
 		pkg_name=${x##*/}
-		pkg_name=${pkg_name%.*}
+	#	pkg_name=${pkg_name%.*}
 		mkdir -p 			   /.live/PKG_${pkg_name}
 		mount -nt squashfs ${x} -o loop,ro /.live/PKG_${pkg_name}
 		mount -o  remount,append:/.live/PKG_${pkg_name}=ro aufs         /.live/root
@@ -406,6 +443,7 @@ if grep -iq copy2ram /proc/cmdline; then
 	else
 		cp     ${Img_path} 	 /
 		if [[ $? == 0 ]]; then
+			Img_path_old=${Img_path}
 			Img_path="/${Img_path##*/}"
 			umount /.live/device && rm -rf /.live/device
 		else
@@ -463,6 +501,7 @@ fi
 		else
 			cp     ${Img_path} 	 /
 			if [[ $? == 0 ]]; then
+				Img_path_old=${Img_path}
 				Img_path="/${Img_path##*/}"
 				umount /.live/device && rm -rf /.live/device
 			else
